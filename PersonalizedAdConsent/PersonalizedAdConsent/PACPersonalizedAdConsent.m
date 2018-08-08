@@ -316,41 +316,103 @@ PACDeserializeAdProviders(NSArray<NSDictionary *> *_Nullable serializedProviders
       handler(error);
     });
   };
-  NSURL *infoURL = [self infoUpdateURLForPublisherIdentifiers:publisherIdentifiers];
-  NSURLSession *session = [NSURLSession sharedSession];
-  NSURLSessionDataTask *dataTask =
-      [session dataTaskWithURL:infoURL
-             completionHandler:^(NSData *_Nullable data, NSURLResponse *_Nullable response,
-                                 NSError *_Nullable error) {
-               if (error || !data.length) {
+    
+    NSInteger majorVersion = 0;
+    
+    NSArray *decomposedOSVersion = [[UIDevice currentDevice].systemVersion componentsSeparatedByString:@"."];
+    if (decomposedOSVersion.count > 0) majorVersion = [decomposedOSVersion[0] integerValue];
+    
+    __weak typeof(self) weakSelf = self;
+    NSURL *infoURL = [self infoUpdateURLForPublisherIdentifiers:publisherIdentifiers];
+    NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:infoURL];
+    
+    if (majorVersion >= 11) {
+        NSURLSessionConfiguration* config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        NSURLSession* session = [NSURLSession sessionWithConfiguration:config];
+            [[session dataTaskWithRequest:request
+                        completionHandler:^(NSData* _Nullable data,
+                                            NSURLResponse* _Nullable response,
+                                            NSError* _Nullable error)
+              {
+                  if (error || !data.length) {
+                      if (!error) {
+                          error = PACErrorWithDescription(@"Unable to update publisher identifier info.");
+                      }
+                      asyncHandler(error);
+                      return;
+                  }
+        
+                  NSDictionary<NSString *, id> *info =
+                  [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+                  if (error || ![info isKindOfClass:[NSDictionary class]]) {
+                      if (!error) {
+                          error = PACErrorWithDescription(@"Invalid response.");
+                      }
+                      asyncHandler(error);
+                      return;
+                  }
+        
+                  NSString *responseString =
+                  [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      __strong typeof(weakSelf) strongSelf = weakSelf;
+        
+                      [strongSelf handleInfoUpdateResponse:publisherIdentifiers
+                                                info:info
+                                      responseString:responseString
+                              asyncCompletionHandler:asyncHandler];
+                  });
+              }] resume];
+            [session finishTasksAndInvalidate];
+    } else {
+        [NSURLConnection sendAsynchronousRequest:request
+                                           queue:[NSOperationQueue mainQueue]
+                               completionHandler:^(NSURLResponse *response,
+                                                   NSData *data,
+                                                   NSError *error)
+         {
+             NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+             if (httpResponse.statusCode == 200)
+             {
+                 // Data was posted successfully
+                 if (error || !data.length) {
+                     if (!error) {
+                         error = PACErrorWithDescription(@"Unable to update publisher identifier info.");
+                     }
+                     asyncHandler(error);
+                     return;
+                 }
+                 
+                 NSDictionary<NSString *, id> *info =
+                 [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+                 if (error || ![info isKindOfClass:[NSDictionary class]]) {
+                     if (!error) {
+                         error = PACErrorWithDescription(@"Invalid response.");
+                     }
+                     asyncHandler(error);
+                     return;
+                 }
+                 
+                 NSString *responseString =
+                 [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                 
+                 dispatch_async(dispatch_get_main_queue(), ^{
+                     __strong typeof(weakSelf) strongSelf = weakSelf;
+                     
+                     [strongSelf handleInfoUpdateResponse:publisherIdentifiers
+                                                     info:info
+                                           responseString:responseString
+                                   asyncCompletionHandler:asyncHandler];
+                 });
+             } else {
                  if (!error) {
-                   error = PACErrorWithDescription(@"Unable to update publisher identifier info.");
+                     error = PACErrorWithDescription(@"Invalid response.");
                  }
                  asyncHandler(error);
-                 return;
-               }
-
-               NSDictionary<NSString *, id> *info =
-                   [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
-               if (error || ![info isKindOfClass:[NSDictionary class]]) {
-                 if (!error) {
-                   error = PACErrorWithDescription(@"Invalid response.");
-                 }
-                 asyncHandler(error);
-                 return;
-               }
-
-               NSString *responseString =
-                   [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-
-               dispatch_async(dispatch_get_main_queue(), ^{
-                 [self handleInfoUpdateResponse:publisherIdentifiers
-                                           info:info
-                                 responseString:responseString
-                         asyncCompletionHandler:asyncHandler];
-               });
-             }];
-  [dataTask resume];
+             }
+         }];
+    }
 }
 
 - (nullable NSError *)validateInfo:(nonnull NSDictionary<NSString *, id> *)info {
